@@ -1,0 +1,18 @@
+#gitlab-ci.yml
+
+stages:
+  - preparing
+  - build
+  - deploy
+
+include:
+  - local: .gitlab-ci/deploy.gitlab-ci.yml
+    rules:
+      - if: $CI_COMMIT_TAG && $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+\-beta/
+
+not-running-job:
+  stage: preparing
+  only:
+    variables:
+      - $NOT_FOUND_VARIABLE == 'not-found-value'
+  script: echo 'This job shouldn't start!' && exit 1
