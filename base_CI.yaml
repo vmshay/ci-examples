@@ -1,0 +1,118 @@
+# stages:
+#   - preparing
+#   - build
+#   - deploy
+
+
+
+
+.template:
+  when: on_success
+  tags: 
+    - deploy
+  environment: 
+    name: develop
+  variables:
+    GIT_STRATEGY: none
+    WORKDIR: '/srv/${CI_PROJECT_NAME}-${CI_ENVIRONMENT_NAME}'
+  before_script:
+    - |
+      if [ -z "${WORKDIR}" ]; then
+        echo '$WORKDIR variable is empty!'
+        exit 1
+      fi
+      if [ ! -d "${WORKDIR}" ]; then
+          mkdir -p "${WORKDIR}"
+      fi
+      cd "${WORKDIR}"
+
+.docker-compose-service-deploy-script: &docker-compose-service-deploy-script
+  script:
+    - docker-compose up --detach --no-deps ${COMPOSE_FLAGS:-} "${SERVICE_NAME:-not-found-service}"
+    - |
+      for CONTAINER_NAME in $(docker inspect -f '{{.Name}}' $(docker-compose ps -q ${SERVICE_NAME}) | cut -c2-)
+      do
+        CURRENT_TRY_NUMBER=0
+        while [[ "${CONTAINER_HEALTH_STATUS}" != 'null' && "${CONTAINER_HEALTH_STATUS}" != 'healthy' ]] && (( $CURRENT_TRY_NUMBER < ${MAX_TRIES_COUNT:-60} ))
+        do
+          CONTAINER_HEALTH_STATUS=$(docker inspect --format "{{json .State.Health }}" ${CONTAINER_NAME} | jq --raw-output '.Status')
+          if [[ "${CONTAINER_HEALTH_STATUS}" == 'unhealthy' ]]; then
+            docker logs ${CONTAINER_NAME}
+            echo
+            echo "${CONTAINER_NAME} health status is ${CONTAINER_HEALTH_STATUS}!"
+            exit 1
+          fi
+          CURRENT_TRY_NUMBER=$(($CURRENT_TRY_NUMBER+1))
+          sleep ${INTERVAL_SECONDS:-1}
+        done
+        echo "${CONTAINER_NAME} health status is ${CONTAINER_HEALTH_STATUS}!"
+        CONTAINER_HEALTH_STATUS=''
+      done
+
+.template-deploy-service: &template-deploy-service
+  extends: .template
+  stage: deploy
+  <<: *docker-compose-service-deploy-script
+
+  
+
+      
+prepare:
+  extends: .template
+  stage: preparing
+  when: always
+
+  variables: 
+    GIT_STRATEGY: fetch
+    # DOT_ENV_FILE_CONTENT: |
+    #   WORKDIR=$WORKDIR
+    #   PROJECT_DIR=$CI_PROJECT_DIR
+  script:
+    - >
+      rsync "${CI_PROJECT_DIR}/" "${WORKDIR}/" -r --delete 
+      --filter=":- .gitignore"
+      --include='**.gitignore'
+      --exclude=server/
+      --exclude=.env
+    # - rm -rf .env
+    # - touch '.env'
+    # - echo "${DOT_ENV_FILE_CONTENT}" >> '.env'
+
+
+#build
+frontend:build:
+  extends: .template
+  stage: build
+  script: 
+    - |
+      docker-compose build react-app
+
+backend:build:
+  extends: .template
+  stage: build
+  script: 
+    - |
+      docker-compose build laravel
+
+postgres:build:
+  extends: .template
+  stage: build
+  script: 
+    - |
+      docker-compose pull postgres
+
+#deploy
+frontend:deploy:
+  <<: *template-deploy-service
+  variables:
+    SERVICE_NAME: react-app
+
+backend:deploy:
+  <<: *template-deploy-service
+  variables:
+    SERVICE_NAME: laravel
+
+postgres:deploy:
+  <<: *template-deploy-service
+  variables:
+    SERVICE_NAME: postgres
