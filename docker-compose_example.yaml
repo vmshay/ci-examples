@@ -1,0 +1,53 @@
+version: '3.8'
+
+networks:
+  docker_network: { }
+
+
+x-base-service: &base-service
+  restart: unless-stopped
+  networks:
+    - docker_network
+
+services:
+  react-app:
+    <<: *base-service
+    build:
+      context: frontend/
+    ports:
+      - '0.0.0.0:${REACT_APP_PORT:-3000}:80'
+    depends_on:
+      - postgres
+
+  postgres:
+    <<: *base-service
+    image: postgres
+    volumes:
+      - ./server/postgres:/var/lib/postgresql/data
+    environment:
+      POSTGRES_USER: ${DB_USERNAME:-dbuser}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-password}
+      POSTGRES_DB: ${DB_NAME:-laravel_db}
+    healthcheck:
+      test: pg_isready --username=${DB_USERNAME} --dbname=${DB_NAME:-laravel_db}
+      interval: 30s
+      timeout: 30s
+      retries: 3
+
+
+
+  laravel:
+    <<: *base-service
+    environment:
+      APP_KEY: ${LARAVEL_APP_KEY:-}
+      DB_CONNECTION: "pgsql"
+      DB_PORT: 5432
+      DB_DATABASE: ${DB_NAME:-laravel_db}
+      DB_USERNAME: ${DB_USERNAME:-dbuser}
+      DB_PASSWORD: ${DB_PASSWORD:-password}
+    build:
+      context: backend/
+    ports:
+      - '0.0.0.0:${LARAVEL_PORT:-8000}:8000'
+    depends_on:
+      - postgres
